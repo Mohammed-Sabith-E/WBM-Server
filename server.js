@@ -1,5 +1,4 @@
 const express = require('express');
-const session = require('express-session');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -18,108 +17,54 @@ const io = socketIo(server, {
     }
 });
 
+// Enable CORS for all routes
+// app.use(cors({ origin: 'http://127.0.0.1:5502' }));
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
-app.use(cors());
-app.use(session({
-    secret: 'WBM_AURIFY',
-    resave: true,
-    saveUninitialized: true
-}));
 
 const upload = multer({ dest: 'uploads/' });
 
-const clientMap = new Map(); // Map to store client instances per session
-
-io.use((socket, next) => {
-    const sessionID = socket.handshake.query.sessionID;
-    if (sessionID) {
-        socket.sessionID = sessionID;
-        return next();
-    }
-    return next(new Error('Unauthorized'));
+const client = new Client({
+    authStrategy: new LocalAuth(),
+    webVersionCache: {
+        type: "remote",
+        remotePath: "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html",
+    },
 });
 
-const initClient = (sessionID) => {
-    const client = new Client({
-        session: sessionID,
-        authStrategy: new LocalAuth(),
-        webVersionCache: {
-            type: "remote",
-            remotePath: "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html",
-        },
+client.on('qr', (qr) => {
+    qrcode.toDataURL(qr, (err, url) => {
+        io.emit('qr', url);
+        io.emit('message', 'QR Code received, scan please!');
     });
+});
 
-    client.on('qr', (qr) => {
-        qrcode.toDataURL(qr, (err, url) => {
-            console.log(url);
-            io.to(sessionID).emit('qr', url); // Emit QR to specific session
-            io.to(sessionID).emit('message', 'QR Code received, scan please!');
-        });
-    });
+client.on('ready', () => {
+    io.emit('ready', 'WhatsApp is ready!');
+    io.emit('message', 'WhatsApp is ready!');
+});
 
-    client.on('ready', () => {
-        io.to(sessionID).emit('ready', 'WhatsApp is ready!');
-        io.to(sessionID).emit('message', 'WhatsApp is ready!');
-    });
+client.on('authenticated', () => {
+    io.emit('authenticated', 'WhatsApp authenticated!');
+    io.emit('message', 'WhatsApp authenticated!');
+});
 
-    client.on('authenticated', () => {
-        io.to(sessionID).emit('authenticated', 'WhatsApp authenticated!');
-        io.to(sessionID).emit('message', 'WhatsApp authenticated!');
-    });
+client.on('auth_failure', (msg) => {
+    io.emit('message', 'Authentication failure, restarting...');
+});
 
-    client.on('auth_failure', (msg) => {
-        io.to(sessionID).emit('message', 'Authentication failure, restarting...');
-    });
-
-    client.on('disconnected', (reason) => {
-        io.to(sessionID).emit('message', 'WhatsApp is disconnected!');
-        client.initialize();
-    });
-
+client.on('disconnected', (reason) => {
+    io.emit('message', 'WhatsApp is disconnected!');
     client.initialize();
-    clientMap.set(sessionID, client);
-};
+});
 
-
+client.initialize();
 
 io.on('connection', (socket) => {
     console.log('A user connected');
-    console.log(socket.id);
-
-    socket.on('request-qr', () => {
-        const sessionID = socket.handshake.query.sessionID;
-        if (clientMap.has(sessionID)) {
-            socket.emit('message', 'Already authenticated');
-        } else {
-            initClient(sessionID);
-        }
-    });
-
-    const sessionID = socket.handshake.query.sessionID;
-    if (sessionID) {
-        socket.join(sessionID);
-    }
-
-    socket.on('disconnect', () => {
-        console.log('A user disconnected');
-        const sessionID = socket.handshake.query.sessionID;
-        if (clientMap.has(sessionID)) {
-            const client = clientMap.get(sessionID);
-            client.destroy();
-            clientMap.delete(sessionID);
-        }
-    });
 
     socket.on('send-message', ({ phoneNumbers, message }) => {
-        const sessionID = socket.handshake.query.sessionID;
-        const client = clientMap.get(sessionID);
-
-        if (!client) {
-            socket.emit('message', 'Client not initialized');
-            return;
-        }
-
         const numbersArray = phoneNumbers.split(',').map(number => number.trim() + '@c.us');
         const results = [];
 
@@ -137,12 +82,14 @@ io.on('connection', (socket) => {
 
         sendMessages();
     });
-});
 
-
-app.get('/getSessionID', (req, res) => {
-    const sessionID = req.sessionID;
-    res.send(sessionID);
+    socket.on('request-qr', () => {
+        if (client.info && client.info.wid) {
+            socket.emit('message', 'Already authenticated');
+        } else {
+            client.initialize();
+        }
+    });
 });
 
 app.post('/send-file', upload.single('file'), async (req, res) => {
