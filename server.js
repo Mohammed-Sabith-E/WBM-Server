@@ -33,13 +33,6 @@ const client = new Client({
     },
 });
 
-client.on('qr', (qr) => {
-    qrcode.toDataURL(qr, (err, url) => {
-        io.emit('qr', url);
-        io.emit('message', 'QR Code received, scan please!');
-    });
-});
-
 client.on('ready', () => {
     io.emit('ready', 'WhatsApp is ready!');
     io.emit('message', 'WhatsApp is ready!');
@@ -83,11 +76,21 @@ io.on('connection', (socket) => {
         sendMessages();
     });
 
-    socket.on('request-qr', () => {
+    // Modify the socket.on('request-qr') function
+    socket.on('request-qr', (userID) => {
         if (client.info && client.info.wid) {
             socket.emit('message', 'Already authenticated');
         } else {
-            client.initialize();
+            // Generate a unique QR code based on the userID
+            const qrContent = `YourUserID:${userID}`; // Customize QR content as needed
+            qrcode.toDataURL(qrContent, (err, url) => {
+                if (err) {
+                    socket.emit('message', 'Failed to generate QR code');
+                } else {
+                    socket.emit('qr', url);
+                    socket.emit('message', 'Scan QR code to authenticate');
+                }
+            });
         }
     });
 });
