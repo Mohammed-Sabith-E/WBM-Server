@@ -3,66 +3,103 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const qrcode = require('qrcode');
 const socketIo = require('socket.io');
 const http = require('http');
-const cors = require('cors');
+const cookieParser = require('cookie-parser');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-    cors: {
-        origin: '*', // Allow requests from any origin
-        methods: ['GET', 'POST'] // Allow only GET and POST requests
-    }
-});
+const io = socketIo(server);
 
-// Enable CORS for all routes
-// app.use(cors({ origin: 'http://127.0.0.1:5502' }));
-
+app.set('view engine', 'ejs');
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
+app.use(cookieParser()); // Use cookie-parser middleware
 
 const upload = multer({ dest: 'uploads/' });
 
-const client = new Client({
-    authStrategy: new LocalAuth(),
-    webVersionCache: {
-        type: "remote",
-        remotePath: "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html",
-    },
-});
+const clients = new Map(); // Store clients for each session
 
-client.on('ready', () => {
-    io.emit('ready', 'WhatsApp is ready!');
-    io.emit('message', 'WhatsApp is ready!');
-});
+const createClient = (sessionId) => {
+    const client = new Client({
+        authStrategy: new LocalAuth({ clientId: sessionId }), // Create a unique clientId for each session
+        puppeteer: {
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+            headless: true,
+            timeout: 60000, // 60 seconds
+        },
+        webVersionCache: {
+            type: "remote",
+            remotePath: "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html",
+        },
+    });
 
-client.on('authenticated', () => {
-    io.emit('authenticated', 'WhatsApp authenticated!');
-    io.emit('message', 'WhatsApp authenticated!');
-});
+    client.on('qr', (qr) => {
+        io.to(sessionId).emit('qr', qr); // Emit the QR code to the specific client
+    });
 
-client.on('auth_failure', (msg) => {
-    io.emit('message', 'Authentication failure, restarting...');
-});
+    client.on('ready', () => {
+        io.to(sessionId).emit('ready');
+    });
 
-client.on('disconnected', (reason) => {
-    io.emit('message', 'WhatsApp is disconnected!');
+    client.on('message', msg => {
+        if (msg.body === '!ping') {
+            msg.reply('pong');
+        }
+    });
+
+    client.on('disconnected', (reason) => {
+        console.log('Client was logged out', reason);
+        clients.delete(sessionId);
+    });
+
+    client.on('error', (error) => {
+        console.error('Client error:', error);
+        clients.delete(sessionId);
+    });
+
+    client.on('auth_failure', (msg) => {
+        console.error('AUTHENTICATION FAILURE', msg);
+        clients.delete(sessionId);
+    });
+
     client.initialize();
-});
-
-client.initialize();
+    return client;
+};
 
 io.on('connection', (socket) => {
-    console.log('A user connected');
+    console.log('A user connected:', socket.id);
 
-    socket.on('send-message', ({ phoneNumbers, message }) => {
-        const numbersArray = phoneNumbers.split(',').map(number => number.trim() + '@c.us');
+    // Parse cookies from socket handshake headers
+    const cookies = parseCookies(socket.handshake.headers.cookie);
+    let sessionId = cookies.sessionId;
+
+    if (!sessionId) {
+        // Generate new session ID if not present
+        sessionId = uuidv4();
+        socket.emit('set-cookie', { sessionId });
+    }
+
+    if (!clients.has(sessionId)) {
+        const client = createClient(sessionId);
+        clients.set(sessionId, client);
+    }
+
+    socket.on('send-message', (data) => {
+        const client = clients.get(sessionId);
+        if (!client) {
+            socket.emit('status', 'Client not initialized.');
+            return;
+        }
+
+        const { message, numbers } = data;
+        const phoneNumbers = numbers.split(',').map(number => `${number.trim()}@c.us`);
+
         const results = [];
 
         const sendMessages = async () => {
-            for (const number of numbersArray) {
+            for (const number of phoneNumbers) {
                 try {
                     await client.sendMessage(number, message);
                     results.push(`Message sent to ${number}`);
@@ -76,88 +113,64 @@ io.on('connection', (socket) => {
         sendMessages();
     });
 
-    // Modify the socket.on('request-qr') function
-    socket.on('request-qr', (userID) => {
-        if (client.info && client.info.wid) {
-            socket.emit('message', 'Already authenticated');
-        } else {
-            // Generate a unique QR code based on the userID
-            const qrContent = `YourUserID:${userID}`; // Customize QR content as needed
-            qrcode.toDataURL(qrContent, (err, url) => {
-                if (err) {
-                    socket.emit('message', 'Failed to generate QR code');
-                } else {
-                    socket.emit('qr', url);
-                    socket.emit('message', 'Scan QR code to authenticate');
+    socket.on('send-file', (data) => {
+        const client = clients.get(sessionId);
+        if (!client) {
+            socket.emit('status', 'Client not initialized.');
+            return;
+        }
+
+        const { message, numbers, file, fileName, mimeType } = data;
+        const phoneNumbers = numbers.split(',').map(number => `${number.trim()}@c.us`);
+        const media = new MessageMedia(mimeType, file, fileName);
+
+        const results = [];
+
+        const sendFiles = async () => {
+            for (const number of phoneNumbers) {
+                try {
+                    await client.sendMessage(number, media, { caption: message });
+                    results.push(`File sent to ${number}`);
+                } catch (err) {
+                    results.push(`Failed to send file to ${number}: ${err}`);
                 }
-            });
+            }
+            socket.emit('status', results.join('\n'));
+        };
+
+        sendFiles();
+    });
+
+    socket.on('disconnect', () => {
+        console.log('User disconnected:', socket.id);
+        const client = clients.get(sessionId);
+        if (client) {
+            client.destroy();
+            clients.delete(sessionId);
         }
     });
 });
 
-app.post('/send-file', upload.single('file'), async (req, res) => {
-    const message = req.body.message;
-    let phoneNumbers = req.body.phoneNumbers; // Make sure phoneNumbers is always a string or an array
-
-
-    console.log(phoneNumbers);
-    // Check if phoneNumbers is not a string or an array, convert it to an empty string
-    if (typeof phoneNumbers !== 'string' && !Array.isArray(phoneNumbers)) {
-        phoneNumbers = '';
+app.get('/', (req, res) => {
+    let sessionId = req.cookies.sessionId;
+    if (!sessionId) {
+        sessionId = uuidv4();
+        res.cookie('sessionId', sessionId, { httpOnly: true });
     }
-
-    const filePath = req.file ? req.file.path : null; // Check if a file is uploaded
-    const fileName = req.file ? req.file.originalname : null; // Check if a file is uploaded
-    const mimeType = req.file ? req.file.mimetype : null; // Check if a file is uploaded
-
-    let numbersArray = [];
-    if (typeof phoneNumbers === 'string') {
-        // If phoneNumbers is a string, split it and trim each number
-        numbersArray = phoneNumbers.split(',').map(number => number.trim() + '@c.us');
-    } else if (Array.isArray(phoneNumbers)) {
-        // If phoneNumbers is an array, trim each number
-        numbersArray = phoneNumbers.map(number => number.trim() + '@c.us');
-    }
-
-    const results = [];
-
-    // If no file is uploaded, handle sending messages without media
-    if (!filePath) {
-        for (const number of numbersArray) {
-            try {
-                await client.sendMessage(number, message);
-                results.push(`Message sent to ${number}`);
-            } catch (err) {
-                results.push(`Failed to send message to ${number}: ${err}`);
-            }
-        }
-
-        res.json({ status: results });
-        return; // Exit the function early since there's no file to process
-    }
-
-    // Process the file
-    fs.readFile(filePath, 'base64', async (err, data) => {
-        if (err) {
-            return res.json({ status: `Failed to read file: ${err}` });
-        }
-
-        const media = new MessageMedia(mimeType, data, fileName);
-
-        for (const number of numbersArray) {
-            try {
-                await client.sendMessage(number, media, { caption: message });
-                results.push(`Message sent to ${number}`);
-            } catch (err) {
-                results.push(`Failed to send message to ${number}: ${err}`);
-            }
-        }
-
-        res.json({ status: results });
-    });
+    res.render('index');
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
+
+// Helper function to parse cookies
+function parseCookies(cookieHeader) {
+    const cookies = {};
+    cookieHeader?.split(';').forEach(cookie => {
+        const [name, value] = cookie.split('=').map(c => c.trim());
+        cookies[name] = value;
+    });
+    return cookies;
+}
