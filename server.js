@@ -62,40 +62,21 @@ function initializeClient(userid, res) {
 // POST endpoint to receive userid and send QR code
 app.post('/userid', (req, res) => {
     const { userid } = req.body;
-    if (userid) {
-        console.log(`Received userid: ${userid}`);
-        if (!clients[userid]) {
-            initializeClient(userid, res);
-        } else {
-            const client = clients[userid];
-            if (client.info && client.info.pushname) {
-                res.status(200).send({ message: 'Client already authenticated' });
-            } else {
-                initializeClient(userid, res);
-            }
-        }
-    } else {
-        res.status(400).send({ message: 'User ID is missing' });
+    if (!userid) {
+        return res.status(400).send({ message: 'User ID is missing' });
     }
-});
 
-// POST endpoint to disconnect client
-app.post('/disconnect', (req, res) => {
-    const { userid } = req.body;
-    const client = clients[userid];
+    console.log(`Received userid: ${userid}`);
 
-    if (client) {
-        client.destroy()
-            .then(() => {
-                delete clients[userid];
-                res.status(200).send({ message: `Client ${userid} disconnected` });
-                console.log(`Client ${userid} disconnected`);
-            })
-            .catch(err => {
-                res.status(500).send({ message: `Failed to disconnect client ${userid}: ${err}` });
-            });
+    if (!clients[userid]) {
+        initializeClient(userid, res);
     } else {
-        res.status(400).send({ message: 'Client not found or not initialized' });
+        const client = clients[userid];
+        if (client.info && client.info.pushname) {
+            return res.status(200).send({ message: 'Client already authenticated' });
+        } else {
+            initializeClient(userid, res);
+        }
     }
 });
 
