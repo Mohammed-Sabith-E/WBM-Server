@@ -137,12 +137,12 @@ app.post('/send-file', upload.single('file'), async (req, res) => {
     }
 
     // Process the file
-    fs.readFile(filePath, 'base64', async (err, data) => {
+    fs.readFile(filePath, async (err, data) => {
         if (err) {
             return res.json({ status: `Failed to read file: ${err}` });
         }
 
-        const media = new MessageMedia(mimeType, data, fileName);
+        const media = new MessageMedia(mimeType, data.toString('base64'), fileName);
 
         for (const number of numbersArray) {
             try {
