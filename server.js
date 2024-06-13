@@ -7,7 +7,7 @@ const fs = require('fs');
 const multer = require('multer');
 
 const app = express();
-const port = 3000;
+var port = process.env.PORT || 3000;
 
 // Middleware to enable CORS
 app.use(cors());
