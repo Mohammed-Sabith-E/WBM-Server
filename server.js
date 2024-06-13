@@ -37,6 +37,8 @@ function initializeClient(userid, res) {
 
     clients[userid] = client;
 
+    let clientReady = false; // Flag to track client readiness
+
     client.on('qr', qr => {
         console.log(`Generating QR code for ${userid}`);
         qrcode.toDataURL(qr, (err, url) => {
@@ -54,6 +56,11 @@ function initializeClient(userid, res) {
 
     client.on('ready', () => {
         console.log(`Client ${userid} is ready!`);
+        // Send response only if the client is ready and response hasn't been sent yet
+        if (!clientReady && !res.headersSent) {
+            res.status(200).send({ message: `Client ${userid} is ready!` });
+            clientReady = true; // Set flag to true indicating response has been sent
+        }
     });
 
     client.on('disconnected', (reason) => {
