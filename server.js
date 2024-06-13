@@ -10,7 +10,7 @@ const app = express();
 var port = process.env.PORT || 3000;
 
 const corsOptions = {
-  origin: 'http://example.com', // Allow requests from this origin
+  origin: '*', // Allow requests from this origin
   optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
 };
 
