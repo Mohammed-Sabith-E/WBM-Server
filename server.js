@@ -109,38 +109,38 @@ app.post('/send-file', upload.single('file'), async (req, res) => {
     const results = [];
 
     // If no file is uploaded, handle sending messages without media
-    if (!filePath) {
-        for (const number of numbersArray) {
-            try {
-                await client.sendMessage(number, message);
-                results.push(`Message sent to ${number}`);
-            } catch (err) {
-                results.push(`Failed to send message to ${number}: ${err}`);
-            }
+if (!filePath) {
+    for (const number of numbersArray) {
+        try {
+            await client.sendMessage(number, message);
+            results.push(`${results.length + 1} out of ${numbersArray.length} sent to ${number}`);
+        } catch (err) {
+            results.push(`Failed to send message to ${number}: ${err}`);
         }
-
-        return res.json({ status: results });
     }
 
-    // Process the file
-    fs.readFile(filePath, async (err, data) => {
-        if (err) {
-            return res.json({ status: `Failed to read file: ${err}` });
+    return res.json({ status: results });
+}
+
+// Process the file
+fs.readFile(filePath, async (err, data) => {
+    if (err) {
+        return res.json({ status: `Failed to read file: ${err}` });
+    }
+
+    const media = new MessageMedia(mimeType, data.toString('base64'), fileName);
+
+    for (const number of numbersArray) {
+        try {
+            await client.sendMessage(number, media, { caption: message });
+            results.push(`${results.length + 1} out of ${numbersArray.length} sent to ${number}`);
+        } catch (err) {
+            results.push(`Failed to send message to ${number}: ${err}`);
         }
+    }
 
-        const media = new MessageMedia(mimeType, data.toString('base64'), fileName);
-
-        for (const number of numbersArray) {
-            try {
-                await client.sendMessage(number, media, { caption: message });
-                results.push(`Message sent to ${number}`);
-            } catch (err) {
-                results.push(`Failed to send message to ${number}: ${err}`);
-            }
-        }
-
-        res.json({ status: results });
-    });
+    res.json({ status: results });
+});
 });
 
 app.listen(port, () => {
