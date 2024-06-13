@@ -115,40 +115,47 @@ app.post('/send-file', upload.single('file'), async (req, res) => {
 
     const results = [];
 
+    const messageDelay = 5000; // 5 seconds delay between messages
+    const messageBatchSize = 10; // Send 10 messages before a 30 seconds delay
+
+    // Function to send messages with delays
+    async function sendMessagesWithDelay(messages) {
+        for (const [index, number] of messages.entries()) {
+            try {
+                await client.sendMessage(number, message);
+                results.push(`${results.length + 1} out of ${numbersArray.length} sent to ${number}`);
+            } catch (err) {
+                results.push(`Failed to send message to ${number}: ${err}`);
+            }
+
+            // If message index is a multiple of messageBatchSize, apply 30 seconds delay
+            if ((index + 1) % messageBatchSize === 0) {
+                await new Promise(resolve => setTimeout(resolve, 30000)); // 30 seconds delay
+            } else {
+                await new Promise(resolve => setTimeout(resolve, messageDelay)); // 5 seconds delay between messages
+            }
+        }
+    }
+
     // If no file is uploaded, handle sending messages without media
-if (!filePath) {
-    for (const number of numbersArray) {
-        try {
-            await client.sendMessage(number, message);
-            results.push(`${results.length + 1} out of ${numbersArray.length} sent to ${number}`);
-        } catch (err) {
-            results.push(`Failed to send message to ${number}: ${err}`);
+    if (!filePath) {
+        await sendMessagesWithDelay(numbersArray);
+        return res.json({ status: results });
+    }
+
+    // Process the file
+    fs.readFile(filePath, async (err, data) => {
+        if (err) {
+            return res.json({ status: `Failed to read file: ${err}` });
         }
-    }
 
-    return res.json({ status: results });
-}
+        const media = new MessageMedia(mimeType, data.toString('base64'), fileName);
+        await sendMessagesWithDelay(numbersArray.map(() => media)); // Use media for each message
 
-// Process the file
-fs.readFile(filePath, async (err, data) => {
-    if (err) {
-        return res.json({ status: `Failed to read file: ${err}` });
-    }
-
-    const media = new MessageMedia(mimeType, data.toString('base64'), fileName);
-
-    for (const number of numbersArray) {
-        try {
-            await client.sendMessage(number, media, { caption: message });
-            results.push(`${results.length + 1} out of ${numbersArray.length} sent to ${number}`);
-        } catch (err) {
-            results.push(`Failed to send message to ${number}: ${err}`);
-        }
-    }
-
-    res.json({ status: results });
+        res.json({ status: results });
+    });
 });
-});
+
 
 app.listen(port, () => {
     console.log(`Server is running on http://localhost:${port}`);
