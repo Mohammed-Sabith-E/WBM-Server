@@ -2,15 +2,20 @@ const express = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const bodyParser = require('body-parser');
-// const cors = require('cors');
+const cors = require('cors');
 const fs = require('fs');
 const multer = require('multer');
 
 const app = express();
 var port = process.env.PORT || 3000;
 
+const corsOptions = {
+  origin: 'http://example.com', // Allow requests from this origin
+  optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
+};
+
 // Middleware to enable CORS
-// app.use(cors());
+app.use(cors(corsOptions));
 
 // Middleware to parse JSON bodies with increased limit
 app.use(bodyParser.json({ limit: '50mb' }));
